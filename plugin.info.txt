@@ -1,4 +1,4 @@
-base   elasticsearch
+base   elasticsearch-ckg
 author Ashirvad
 email  dokuwiki@cosmocode.de
 date   2019-12-05
