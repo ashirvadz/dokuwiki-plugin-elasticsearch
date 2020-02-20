@@ -66,28 +66,20 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
         $index  = $client->getIndex($this->getConf('indexname'));
 
         // define the query string
-        $qstring = new \Elastica\Query\MultiMatch($QUERY);
-        $qstring->setFields([ $this->getConf('field2'),  $this->getConf('field3')]);
-        $qstring->setQuery($QUERY);
-
+        $qstring = new \Elastica\Query\SimpleQueryString($QUERY);
 
         // create the actual search object
         $equery = new \Elastica\Query();
         $subqueries = new \Elastica\Query\BoolQuery();
         $subqueries->addMust($qstring);
 
-
-
-
         $equery->setHighlight(
             [
                 "pre_tags"  => ['ELASTICSEARCH_MARKER_IN'],
                 "post_tags" => ['ELASTICSEARCH_MARKER_OUT'],
                 "fields"    => [
-                    $this->getConf('field1') => new \stdClass(),
-                    $this->getConf('field2') => new \stdClass(),
-                    $this->getConf('field3') => new \stdClass()]
-                    //'title' => new \stdClass()]
+                    $this->getConf('snippets') => new \stdClass(),
+                    'title' => new \stdClass()]
             ]
         );
 
@@ -244,43 +236,31 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
         }
 
         echo '<dl class="search_results">';
-        echo '<h2>' . sprintf($this->getLang('totalfound'), $found) . '</h2>';
+        echo '<h2>asdf' . sprintf($this->getLang('totalfound'), $found) . '</h2>';
         foreach($results as $row) {
 
             /** @var Elastica\Result $row */
             $page = $row->getSource()['book'];
             $page_src = $row->getSource()['citekey'];
-           // $genre =  $row->getSource()['genre'];
-           // $heading = $row->getSource()['heading'];
            // if(!page_exists($page) || auth_quickaclcheck($page) < AUTH_READ) continue;
 
-            // get highlighted  for book (field1)
+            // get highlighted title
             $title = str_replace(
                 ['ELASTICSEARCH_MARKER_IN', 'ELASTICSEARCH_MARKER_OUT'],
                 ['<strong class="search_hit">', '</strong>'],
-                hsc(join(' … ', (array) $row->getHighlights()[$this->getConf('field1')]))
+                hsc(join(' … ', (array) $row->getHighlights()['book']))
             );
             if(!$title) $title = hsc($row->getSource()['book']);
             if(!$title) $title = hsc(p_get_first_heading($page));
             if(!$title) $title = hsc($page);
 
-            // get highlighted  for heading (field2)
-
-            $heading =  str_replace(
+            // get highlighted snippet
+            $snippet = str_replace(
                 ['ELASTICSEARCH_MARKER_IN', 'ELASTICSEARCH_MARKER_OUT'],
                 ['<strong class="search_hit">', '</strong>'],
-                hsc(join(' … ', (array) $row->getHighlights()[$this->getConf('field2')]))
+                hsc(join(' … ', (array) $row->getHighlights()[$this->getConf('snippets')]))
             );
-
-            // get highlighted  for content (field3)
-            $content = str_replace(
-                ['ELASTICSEARCH_MARKER_IN', 'ELASTICSEARCH_MARKER_OUT'],
-                ['<strong class="search_hit">', '</strong>'],
-                hsc(join(' … ', (array) $row->getHighlights()[$this->getConf('field3')]))
-            );
-
-            //$snippet = $snippet .$this->getConf('snippets') . ' abstract';
-            //hsc($row->getSource()['heading']); // always fall back to heading
+            if(!$snippet) $snippet = hsc($row->getSource()['body']); // always fall back to abstract
 
             echo '<dt>';
             echo '<a href="'.wl($page_src).'" class="wikilink1" title="'.hsc($page).'">';
@@ -303,12 +283,8 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
             echo '</dd>';
 
             // snippets
-            echo '<dd class="heading">';
-            echo $heading;
-            echo '</dd>';
-
-            echo '<dd class="content">';
-            echo $content;
+            echo '<dd class="snippet">';
+            echo $snippet;
             echo '</dd>';
 
         }
