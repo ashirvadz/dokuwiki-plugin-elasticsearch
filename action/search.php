@@ -66,20 +66,18 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
         $index  = $client->getIndex($this->getConf('indexname'));
 
         // define the query string
-        //$qstring = new \Elastica\Query\SimpleQueryString($QUERY);
         $qstring = new \Elastica\Query\MultiMatch($QUERY);
         $qstring->setFields([ $this->getConf('field2'),  $this->getConf('field3')]);
         $qstring->setQuery($QUERY);
+
+
         // create the actual search object
         $equery = new \Elastica\Query();
         $subqueries = new \Elastica\Query\BoolQuery();
         $subqueries->addMust($qstring);
 
-        // Gets the language of the library
-        $language = substr($_SERVER["DOCUMENT_ROOT"],-2);
-        $term = new \Elastica\Query\Term();
-        $term->setTerm('language', $language);
-        $subqueries->addMust($term);
+
+
 
         $equery->setHighlight(
             [
@@ -89,8 +87,7 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
                     $this->getConf('field1') => new \stdClass(),
                     $this->getConf('field2') => new \stdClass(),
                     $this->getConf('field3') => new \stdClass()]
-                    // $this->getConf('snippets') => new \stdClass(),
-                    // 'title' => new \stdClass()]
+                    //'title' => new \stdClass()]
             ]
         );
 
@@ -167,7 +164,6 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
 
         $groups = array_merge(['ALL'], $USERINFO['grps'] ?: []);
 
-
         // no ACL filters for superusers
         if (in_array(ltrim($conf['superuser'], '@'), $groups)) return;
 
@@ -185,8 +181,7 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
             $userIncludeSubquery->addMust($term);
             $includeSubquery->addShould($userIncludeSubquery);
         }
-        //$subqueries->addMust($includeSubquery);
-
+        $subqueries->addMust($includeSubquery);
 
         // groups exclusion SHOULD be respected, not MUST, since that would not allow for exceptions
         $groupExcludeSubquery = new \Elastica\Query\BoolQuery();
