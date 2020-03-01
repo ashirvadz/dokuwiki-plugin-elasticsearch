@@ -1,11 +1,7 @@
-base   elasticsearch-ckg
+base   elasticsearch
 author Ashirvad
-email  dokuwiki@cosmocode.de
-<<<<<<< HEAD
+email  ashirvadz@gmx.com
 date   2019-12-05
 name   Elasticsearch plugin (CKGLibrary)
 desc   Elasticsearch indexing and searching (CKGLibrary)
-=======
 date   2020-01-30
->>>>>>> e4d5fa2f3ca2da8af3c9e06bdef8865c3ea54308
-url    https://www.dokuwiki.org/plugin:elasticsearch
