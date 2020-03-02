@@ -7,11 +7,10 @@
  */
 
 // must be run within Dokuwiki
-use Elastica\Aggregation\Terms;
 use Elastica\Query;
 use Elastica\Query\BoolQuery;
 use Elastica\Query\MultiMatch;
-use Elastica\Query\Range;
+use Elastica\Query\SimpleQueryString;
 use Elastica\Query\Term;
 use Elastica\ResultSet;
 
@@ -30,8 +29,8 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
      */
     public function register(Doku_Event_Handler $controller) {
 
-//        $controller->register_hook('ACTION_ACT_PREPROCESS', 'BEFORE', $this, 'handle_preprocess');
-//        $controller->register_hook('TPL_ACT_UNKNOWN', 'BEFORE', $this, 'handle_action');
+        $controller->register_hook('ACTION_ACT_PREPROCESS', 'BEFORE', $this, 'handle_preprocess');
+        $controller->register_hook('TPL_ACT_UNKNOWN', 'BEFORE', $this, 'handle_action');
 
     }
 
@@ -73,19 +72,20 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
         $client = $hlp->connect();
         $index  = $client->getIndex($this->getConf('indexname'));
 
-        // define the query string
+        // define the main query string
         $qstring = new MultiMatch($QUERY);
         $qstring->setFields([ $this->getConf('field2'),  $this->getConf('field3')]);
         $qstring->setQuery($QUERY);
 
-
-        // create the actual search object
+        // create the main search object
         $equery = new Query();
         $subqueries = new BoolQuery();
         $subqueries->addMust($qstring);
 
-
-
+        // Filter only node results
+        $efilter = new Term();
+        $efilter->setTerm('type', 'node');
+        $equery->setPostFilter($efilter);
 
         $equery->setHighlight(
             [
@@ -95,7 +95,29 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
                     $this->getConf('field1') => new stdClass(),
                     $this->getConf('field2') => new stdClass(),
                     $this->getConf('field3') => new stdClass()]
-                    //'title' => new \stdClass()]
+            ]
+        );
+
+        /// define the book query string   ///
+        $bstring = new SimpleQueryString($QUERY);
+        $bstring-> setFields([$this->getConf('field1')]);
+        $bstring->setQuery($QUERY);
+
+        /// create the book search object   ///
+        $bquery = new Query();
+        $bsubqueries = new BoolQuery();
+        $bsubqueries->addMust($bstring);
+
+        // Filter only book results
+        $bfilter = new Term();
+        $bfilter->setTerm('type', 'book');
+        $bquery->setPostFilter($bfilter);
+
+        $bquery->setHighlight(
+            [
+                "pre_tags"  => ['ELASTICSEARCH_MARKER_IN'],
+                "post_tags" => ['ELASTICSEARCH_MARKER_OUT'],
+                "fields"    => [$this->getConf('field1') => new stdClass()]
             ]
         );
 
@@ -103,112 +125,31 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
         $equery->setSize($this->getConf('perpage'));
         $equery->setFrom($this->getConf('perpage') * ($INPUT->int('p', 1, true) - 1));
 
-        // add ACL subqueries
-        $this->addACLSubqueries($subqueries);
-
-        // add date subquery
-        if ($INPUT->has('min')) {
-            $this->addDateSubquery($subqueries, $INPUT->str('min'));
-        }
-
-        // add namespace filter
-        if($INPUT->has('ns')) {
-            $nsSubquery = new BoolQuery();
-            foreach($INPUT->arr('ns') as $ns) {
-                $term = new Term();
-                $term->setTerm('namespace', $ns);
-                $nsSubquery->addShould($term);
-            }
-            $equery->setPostFilter($nsSubquery);
-        }
+        // Filter according to the language of the library
+        $language = substr($_SERVER["DOCUMENT_ROOT"],-2);
+        $term = new Term();
+        $term->setTerm('language', $language);
+        $subqueries->addMust($term);
+        $bsubqueries->addMust($term);
 
         $equery->setQuery($subqueries);
-
-        // add aggregations for namespaces
-        $agg = new Terms('namespace');
-        $agg->setField('namespace.keyword');
-        $agg->setSize(25);
-        $equery->addAggregation($agg);
+        $bquery->setQuery($bsubqueries);     //  Books
 
         try {
             $result = $index->search($equery);
-            $aggs = $result->getAggregations();
+            $resultbooks = $index->search($bquery);
 
             $this->print_intro();
-            $hlpform->tpl($aggs['namespace']['buckets'] ?: []);
-            $this->print_results($result) && $this->print_pagination($result);
+            $hlpform->tpl($aggs['books']['buckets'] ?: []);
+
+            // Print the results
+            $this->print_results($resultbooks, 'book');
+            $this->print_results($result, 'node') && $this->print_pagination($result);
         } catch(Exception $e) {
-            msg('Something went wrong on searching please try again later or ask an admin for help.<br /><pre>' . hsc($e->getMessage()) . '</pre>', -1);
+            msg('Something went wrong while searching. Please try again later.<br /><pre>' . hsc($e->getMessage()) . '</pre>', -1);
         }
     }
 
-    /**
-     * Adds date subquery
-     *
-     * @param Elastica\Query\BoolQuery $subqueries
-     * @param string $min Modified at the latest one {year|month|week} ago
-     */
-    protected function addDateSubquery($subqueries, $min)
-    {
-        // FIXME
-        if (!in_array($min, ['year', 'month', 'week'])) return;
-
-        $dateSubquery = new Range(
-            'modified',
-            ['gte' => date('Y-m-d', strtotime('1 ' . $min . ' ago'))]
-        );
-        $subqueries->addMust($dateSubquery);
-    }
-
-    /**
-     * Inserts subqueries based on current user's ACLs, none for superusers
-     *
-     * @param BoolQuery $subqueries
-     */
-    protected function addACLSubqueries($subqueries)
-    {
-        global $USERINFO;
-        global $conf;
-
-        $groups = array_merge(['ALL'], $USERINFO['grps'] ?: []);
-
-        // no ACL filters for superusers
-        if (in_array(ltrim($conf['superuser'], '@'), $groups)) return;
-
-        // include if group OR user have read permissions, allows for ACLs such as "block @group except user"
-        $includeSubquery = new BoolQuery();
-        foreach($groups as $group) {
-            $term = new Term();
-            $term->setTerm('groups_include', $group);
-            $includeSubquery->addShould($term);
-        }
-        if (isset($_SERVER['REMOTE_USER'])) {
-            $userIncludeSubquery = new BoolQuery();
-            $term = new Term();
-            $term->setTerm('users_include', $_SERVER['REMOTE_USER']);
-            $userIncludeSubquery->addMust($term);
-            $includeSubquery->addShould($userIncludeSubquery);
-        }
-        $subqueries->addMust($includeSubquery);
-
-        // groups exclusion SHOULD be respected, not MUST, since that would not allow for exceptions
-        $groupExcludeSubquery = new BoolQuery();
-        foreach($groups as $group) {
-            $term = new Term();
-            $term->setTerm('groups_exclude', $group);
-            $groupExcludeSubquery->addShould($term);
-        }
-        $excludeSubquery = new BoolQuery();
-        $excludeSubquery->addMustNot($groupExcludeSubquery);
-        $subqueries->addShould($excludeSubquery);
-
-        // user specific excludes must always be respected
-        if (isset($_SERVER['REMOTE_USER'])) {
-            $term = new Term();
-            $term->setTerm('users_exclude', $_SERVER['REMOTE_USER']);
-            $subqueries->addMustNot($term);
-        }
-    }
 
     /**
      * Prints the introduction text
@@ -239,46 +180,47 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
      *
      * @param ResultSet $results
      * @return bool true when results where shown
+     * @type string the type of result
      */
-    protected function print_results($results) {
+    protected function print_results($results, $type) {
         global $lang;
 
         // output results
         $found = $results->getTotalHits();
 
         if(!$found) {
-            echo '<h2>' . $lang['nothingfound'] . '</h2>';
+            if($type == 'node')
+                echo '<h2>' . $lang['nothingfound'] . '</h2>';
             return (bool)$found;
         }
 
         echo '<dl class="search_results">';
-        echo '<h2>' . sprintf($this->getLang('totalfound'), $found) . '</h2>';
+        if($type=='node')
+            echo '<h2>' . sprintf($this->getLang('totalfound'), $found) . '</h2>';
+        else
+            echo '<h2>' . sprintf($this->getLang('totalbooksfound'), $found). '</h2>';
+
         foreach($results as $row) {
 
             /** @var Elastica\Result $row */
-            $page = $row->getSource()['book'];
+            $page = $row->getSource()['book_name'];
             $page_src = $row->getSource()['citekey'];
            // $genre =  $row->getSource()['genre'];
-           // $heading = $row->getSource()['heading'];
-           // if(!page_exists($page) || auth_quickaclcheck($page) < AUTH_READ) continue;
 
-            // get highlighted  for book (field1)
+
+            // get highlighted  for heading (field1 or field2)
+            if($type=='book') $titlefield = $this->getConf('field1');
+            else $titlefield = $this->getConf('field2');
+
             $title = str_replace(
                 ['ELASTICSEARCH_MARKER_IN', 'ELASTICSEARCH_MARKER_OUT'],
                 ['<strong class="search_hit">', '</strong>'],
-                hsc(join(' … ', (array) $row->getHighlights()[$this->getConf('field1')]))
+                hsc(join(' … ', (array) $row->getHighlights()[$titlefield]))
             );
-            if(!$title) $title = hsc($row->getSource()['book']);
+
+            if(!$title) $title = hsc($row->getSource()[$titlefield]);
             if(!$title) $title = hsc(p_get_first_heading($page));
             if(!$title) $title = hsc($page);
-
-            // get highlighted  for heading (field2)
-
-            $heading =  str_replace(
-                ['ELASTICSEARCH_MARKER_IN', 'ELASTICSEARCH_MARKER_OUT'],
-                ['<strong class="search_hit">', '</strong>'],
-                hsc(join(' … ', (array) $row->getHighlights()[$this->getConf('field2')]))
-            );
 
             // get highlighted  for content (field3)
             $content = str_replace(
@@ -287,33 +229,12 @@ class action_plugin_elasticsearch_search extends DokuWiki_Action_Plugin {
                 hsc(join(' … ', (array) $row->getHighlights()[$this->getConf('field3')]))
             );
 
-            //$snippet = $snippet .$this->getConf('snippets') . ' abstract';
-            //hsc($row->getSource()['heading']); // always fall back to heading
-
             echo '<dt>';
             echo '<a href="'.wl($page_src).'" class="wikilink1" title="'.hsc($page).'">';
             echo $title;
             echo '</a>';
             echo '</dt>';
 
-            // meta
-            echo '<dd class="meta elastic-resultmeta">';
-            if($row->getSource()['namespace']) {
-                echo '<span class="ns">' . $this->getLang('ns') . ' ' . hsc($row->getSource()['namespace']) . '</span>';
-            }
-            if($row->getSource()['user']) {
-                echo ' <span class="author">' . $this->getLang('author') . ' ' . userlink($row->getSource()['user']) . '</span>';
-            }
-            if($row->getSource()['modified']) {
-                $lastmod = strtotime($row->getSource()['modified']);
-                echo ' <span class="">' . $lang['lastmod'] . ' ' . dformat($lastmod) . '</span>';
-            }
-            echo '</dd>';
-
-            // snippets
-            echo '<dd class="heading">';
-            echo $heading;
-            echo '</dd>';
 
             echo '<dd class="content">';
             echo $content;

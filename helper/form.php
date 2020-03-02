@@ -25,11 +25,11 @@ class helper_plugin_elasticsearch_form extends DokuWiki_Plugin
         $searchForm = (new Form(['method' => 'get'], true))->addClass('search-results-form');
         $searchForm->setHiddenField('do', 'search');
 
-        $searchForm->addFieldsetOpen()->addClass('search-form');
+      //  $searchForm->addFieldsetOpen()->addClass('search-form');
         $searchForm->addTextInput('q')->val($QUERY)->useInput(false);
         $searchForm->addButton('', $lang['btn_search'])->attr('type', 'submit');
 
-        $this->addAdvancedSearch($searchForm, $aggregations);
+       // $this->addAdvancedSearch($searchForm, $aggregations);
 
         $searchForm->addFieldsetClose();
 
